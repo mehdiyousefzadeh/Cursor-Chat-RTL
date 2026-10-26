@@ -26,7 +26,12 @@ function Start-Elevated([string[]]$Paths) {
     if ([string]::IsNullOrWhiteSpace($p)) { continue }
     $arg += " `"" + ($p.Replace('"', "")) + "`""
   }
-  Start-Process -FilePath $powershell -Verb RunAs -ArgumentList $arg | Out-Null
+  Write-Host ""
+  Write-Host "Cursor inside a protected folder needs administrator permission."
+  Write-Host "If Windows asks, click Yes. This window stays open."
+  $proc = Start-Process -FilePath $powershell -Verb RunAs -ArgumentList $arg -Wait -PassThru
+  if ($proc) { return [int]$proc.ExitCode }
+  return 1
 }
 
 function Resolve-CursorRoot([string]$Path) {
@@ -263,16 +268,16 @@ try {
 
   $source = Join-Path $here "chat-bidi.js"
   if (-not (Test-Path -LiteralPath $source)) {
-    throw "فایل chat-bidi.js کنار install.ps1 پیدا نشد. کل پوشه را یکجا Extract کنید."
+    throw "chat-bidi.js was not found next to install.ps1. Keep the whole folder together, then run apply.bat."
   }
   $scriptText = [System.IO.File]::ReadAllText($source)
   if ($scriptText -notlike "*__cursorChatBidiInstalled*") {
-    throw "فایل chat-bidi.js ناقص است. پوشه را دوباره دانلود کنید."
+    throw "chat-bidi.js is incomplete. Copy that file again."
   }
 
   $cursor = Get-Process -Name "Cursor" -ErrorAction SilentlyContinue
   if ($cursor) {
-    throw "Cursor هنوز باز است. از منوی File گزینه Exit را بزنید، در Task Manager مطمئن شوید Cursor.exe بسته شده، بعد دوباره apply.bat را اجرا کنید."
+    throw "Cursor is still running. Use File, then Exit. In Task Manager, confirm Cursor.exe is gone, then run apply.bat again."
   }
 
   function Get-FileChecksum([string]$path) {
@@ -292,7 +297,7 @@ try {
     $dest = Join-Path $destDir $name
     if (-not (Test-Path -LiteralPath $dest)) {
       Copy-Item -LiteralPath $file -Destination $dest
-      Write-Log ("نسخه پشتیبان: " + $dest)
+      Write-Log ("backup: " + $dest)
     }
   }
 
@@ -311,7 +316,7 @@ try {
   $roots = New-Object System.Collections.Generic.List[string]
   foreach ($finder in @("Add-RootsFromKnownFolders", "Add-RootsFromRegistry", "Add-RootsFromShortcuts", "Add-RootsFromCommands")) {
     try { & $finder $roots }
-    catch { Write-Log ("جستجوی نصب کامل نشد: " + $_.Exception.Message) }
+    catch { Write-Log ("search failed: " + $_.Exception.Message) }
   }
 
   $manual = New-Object System.Collections.Generic.List[string]
@@ -320,20 +325,20 @@ try {
     [void]$manual.Add($p)
     $resolved = Resolve-CursorRoot $p
     if (-not $resolved) {
-      throw "این پوشه نصب Cursor نیست: $p`nپوشه‌ای را بدهید که فایل Cursor.exe داخل آن است."
+      throw "This folder is not a Cursor install: $p`nChoose the folder that contains Cursor.exe."
     }
     Add-CursorRoot $roots $resolved
   }
 
   if ($roots.Count -eq 0) {
     Write-Host ""
-    Write-Host "نصب Cursor به‌طور خودکار پیدا نشد."
-    Write-Host "روی میانبر Cursor راست‌کلیک کنید، Open file location را بزنید،"
-    Write-Host "و پوشه‌ای را اینجا بچسبانید که Cursor.exe داخل آن است."
-    $typed = Read-Host "پوشه"
+    Write-Host "Cursor was not found automatically."
+    Write-Host "Right-click the Cursor shortcut, choose Open file location,"
+    Write-Host "and paste the folder that contains Cursor.exe."
+    $typed = Read-Host "Folder"
     $resolved = Resolve-CursorRoot $typed
     if (-not $resolved) {
-      throw "نصب Cursor پیدا نشد. پوشه را از Open file location کپی کنید، یا این‌طور اجرا کنید: apply.bat `"D:\Apps\Cursor`""
+      throw "Cursor was not found. Paste the folder from Open file location, or run: apply.bat `"D:\Apps\Cursor`""
     }
     Add-CursorRoot $roots $resolved
     [void]$manual.Add($typed)
@@ -344,12 +349,17 @@ try {
     if (-not (Test-RootWritable $root)) { $needsAdmin = $true }
   }
   if ($needsAdmin -and -not (Test-IsAdmin)) {
+    $elevated = -1
     try {
-      Start-Elevated @($manual.ToArray())
-      exit 0
+      $elevated = Start-Elevated @($manual.ToArray())
     } catch {
-      Write-Log "اجازه مدیر داده نشد. فقط نصب‌هایی به‌روز می‌شوند که بدون آن اجازه قابل نوشتن باشند."
-      Write-Host "اجازه مدیر داده نشد."
+      Write-Log ("Administrator permission was not granted: " + $_.Exception.Message)
+      Write-Host "Administrator permission was not granted."
+      Write-Host "Copies in your user folder will still be updated."
+    }
+    if ($elevated -eq 0) { exit 0 }
+    if ($elevated -gt 0) {
+      throw "The administrator window did not finish the install. Run apply.bat again and click Yes."
     }
   }
 
@@ -360,11 +370,11 @@ try {
   foreach ($root in $roots) {
     if (-not (Test-RootWritable $root)) {
       [void]$skippedRoots.Add($root)
-      Write-Log ("به‌روز نشد، چون این پوشه اجازه مدیر می‌خواهد: " + $root)
+      Write-Log ("skipped, this folder needs administrator permission: " + $root)
       continue
     }
 
-    Write-Log ("در حال به‌روزرسانی: " + $root)
+    Write-Log ("updating: " + $root)
     $outDir = Join-Path $root "resources\app\out"
     $appDir = Join-Path $root "resources\app"
     $wbDir = Join-Path $outDir "vs\code\electron-sandbox\workbench"
@@ -382,21 +392,21 @@ try {
 
     Clear-ReadOnly $jsTarget
     [System.IO.File]::WriteAllText($jsTarget, $scriptText, $utf8)
-    Write-Log ("  نوشته شد: " + $jsTarget)
+    Write-Log ("  wrote: " + $jsTarget)
 
     Clear-ReadOnly $htmlPath
     $html = [System.IO.File]::ReadAllText($htmlPath)
     if ($html -notlike "*$marker*") {
       $needle = '<script src="./workbench.js" type="module"></script>'
       if (-not $html.Contains($needle)) {
-        throw "ساختار این نسخه از Cursor شناخته نشد: $htmlPath"
+        throw "This Cursor version was not recognized: $htmlPath"
       }
       $insert = "<!-- $marker -->`n`t<script src=`"./cursor-chat-bidi.js`"></script>`n`t$needle"
       $html = $html.Replace($needle, $insert)
       [System.IO.File]::WriteAllText($htmlPath, $html, $utf8)
-      Write-Log "  workbench.html به‌روز شد"
+      Write-Log "  workbench.html updated"
     } else {
-      Write-Log "  workbench.html از قبل به‌روز بود"
+      Write-Log "  workbench.html was already updated"
     }
 
     if (Test-Path -LiteralPath $productPath) {
@@ -408,12 +418,12 @@ try {
         $updated = [regex]::Replace($product, $keyPattern, ('${1}' + $hash + '${2}'))
         if ($updated -ne $product) {
           [System.IO.File]::WriteAllText($productPath, $updated, $utf8)
-          Write-Log "  checksum در product.json به‌روز شد"
+          Write-Log "  product.json checksum updated"
         } else {
-          Write-Log "  checksum در product.json از قبل درست بود"
+          Write-Log "  product.json checksum already matched"
         }
       } else {
-        Write-Log "  product.json فیلد checksum مربوط به workbench.html را ندارد"
+        Write-Log "  product.json has no workbench.html checksum"
       }
     }
 
@@ -425,9 +435,9 @@ try {
         if (-not $main.EndsWith("`n")) { $main += "`n" }
         $main += $bootstrap + "`n"
         [System.IO.File]::WriteAllText($mainPath, $main, $utf8)
-        Write-Log "  main.js به‌روز شد"
+        Write-Log "  main.js updated"
       } else {
-        Write-Log "  main.js از قبل به‌روز بود"
+        Write-Log "  main.js was already updated"
       }
     }
 
@@ -435,34 +445,34 @@ try {
   }
 
   if ($patchedRoots.Count -eq 0) {
-    throw "هیچ نصبی به‌روز نشد. apply.bat را دوباره اجرا کنید و اگر ویندوز اجازه مدیر خواست Yes را بزنید."
+    throw "Nothing was updated. Run apply.bat again and click Yes if Windows asks for administrator permission."
   }
 
-  Write-Log ("تمام شد. " + $patchedRoots.Count + " نصب Cursor به‌روز شد.")
+  Write-Log ("Done. Updated " + $patchedRoots.Count + " Cursor install(s).")
   Write-Host ""
-  Write-Host "این نصب‌ها به‌روز شدند:"
+  Write-Host "Updated:"
   foreach ($root in $patchedRoots) { Write-Host ("  " + $root) }
   if ($skippedRoots.Count -gt 0) {
     Write-Host ""
-    Write-Host "این نصب‌ها به‌روز نشدند، چون اجازه مدیر لازم بود:"
+    Write-Host "Not updated, because administrator permission is required:"
     foreach ($root in $skippedRoots) { Write-Host ("  " + $root) }
-    Write-Host "برای همان‌ها دوباره apply.bat را اجرا کنید و وقتی ویندوز پرسید Yes را بزنید."
+    Write-Host "Run apply.bat again and click Yes when Windows asks."
   }
   Write-Host ""
-  Write-Host "حالا Cursor را باز کنید."
-  Write-Host "پاراگرافی که با فارسی شروع شود راست‌چین است."
-  Write-Host "پاراگرافی که با انگلیسی شروع شود چپ‌چین است."
+  Write-Host "Open Cursor."
+  Write-Host "A paragraph that starts in Persian aligns right."
+  Write-Host "A paragraph that starts in English aligns left."
 } catch {
   Write-Host ""
-  Write-Host ("خطا: " + $_.Exception.Message)
+  Write-Host ("ERROR: " + $_.Exception.Message)
   if ($logPath) {
     Add-Content -LiteralPath $logPath -Value ("ERROR: " + $_.Exception.Message) -Encoding UTF8
   }
-  Write-Host "برای بستن Enter را بزنید."
+  Write-Host "Press Enter to close."
   [void](Read-Host)
   exit 1
 }
 
-Write-Host "برای بستن Enter را بزنید."
+Write-Host "Press Enter to close."
 [void](Read-Host)
 exit 0

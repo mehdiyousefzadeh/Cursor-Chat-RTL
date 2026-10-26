@@ -40,12 +40,12 @@ function Test-CanWriteFile([string]$path) {
 try {
   $cursor = Get-Process -Name "Cursor" -ErrorAction SilentlyContinue
   if ($cursor) {
-    throw "Cursor هنوز باز است. از منوی File گزینه Exit را بزنید و بعد دوباره restore.bat را اجرا کنید."
+    throw "Cursor is still running. Use File, then Exit, then run restore.bat again."
   }
 
   $backupRoot = Join-Path $env:APPDATA "Cursor\User\cursor-chat-bidi\backup"
   if (-not (Test-Path -LiteralPath $backupRoot)) {
-    throw "نسخه پشتیبانی پیدا نشد. اول باید apply.bat یک بار با موفقیت اجرا شده باشد."
+    throw "No backup was found. apply.bat has to finish successfully once before restore works."
   }
 
   $jobs = @()
@@ -57,7 +57,7 @@ try {
     $jobs += [pscustomobject]@{ Dir = $dir.FullName; Root = $root }
   }
   if ($jobs.Count -eq 0) {
-    throw "پوشه پشتیبان install-root.txt ندارد. دوباره apply.bat را اجرا کنید و بعد restore.bat را بزنید."
+    throw "The backup has no install-root.txt. Run apply.bat again, then run restore.bat."
   }
 
   $needsAdmin = $false
@@ -74,7 +74,7 @@ try {
       Start-Elevated
       exit 0
     } catch {
-      Write-Host "اجازه مدیر داده نشد. نصب‌های داخل پوشه محافظت‌شده برنمی‌گردند."
+      Write-Host "Administrator permission was not granted. Protected folders will not be restored."
     }
   }
 
@@ -84,7 +84,7 @@ try {
     $root = $job.Root
     $exe = Join-Path $root "Cursor.exe"
     if (-not (Test-Path -LiteralPath $exe)) {
-      Write-Host ("این نصب دیگر وجود ندارد و رد شد: " + $root)
+      Write-Host ("skipped, this install is gone: " + $root)
       continue
     }
 
@@ -103,7 +103,7 @@ try {
     }
     if ($blocked) {
       $skipped++
-      Write-Host ("برنگشت، چون این پوشه اجازه مدیر می‌خواهد: " + $root)
+      Write-Host ("not restored, this folder needs administrator permission: " + $root)
       continue
     }
 
@@ -113,36 +113,36 @@ try {
         $destItem = Get-Item -LiteralPath $item.Dest -ErrorAction SilentlyContinue
         if ($destItem -and $destItem.IsReadOnly) { $destItem.IsReadOnly = $false }
         Copy-Item -LiteralPath $src -Destination $item.Dest -Force
-        Write-Host ("برگردانده شد: " + $item.Dest)
+        Write-Host ("restored: " + $item.Dest)
       }
     }
 
     $injected = Join-Path $wbDir "cursor-chat-bidi.js"
     if (Test-Path -LiteralPath $injected) {
       Remove-Item -LiteralPath $injected -Force
-      Write-Host ("حذف شد: " + $injected)
+      Write-Host ("removed: " + $injected)
     }
     $restored++
   }
 
   if ($restored -eq 0) {
-    throw "هیچ نصبی برنگشت. restore.bat را دوباره اجرا کنید و اگر ویندوز اجازه مدیر خواست Yes را بزنید."
+    throw "Nothing was restored. Run restore.bat again and click Yes if Windows asks for administrator permission."
   }
 
   Write-Host ""
-  Write-Host ("تمام شد. " + $restored + " نصب به حالت قبل برگشت.")
+  Write-Host ("Done. Restored " + $restored + " install(s).")
   if ($skipped -gt 0) {
-    Write-Host "بعضی مسیرها برنگشتند. دوباره restore.bat را اجرا کنید و Yes را بزنید."
+    Write-Host "Some folders were not restored. Run restore.bat again and click Yes."
   }
-  Write-Host "حالا Cursor را باز کنید."
+  Write-Host "Open Cursor."
 } catch {
   Write-Host ""
-  Write-Host ("خطا: " + $_.Exception.Message)
-  Write-Host "برای بستن Enter را بزنید."
+  Write-Host ("ERROR: " + $_.Exception.Message)
+  Write-Host "Press Enter to close."
   [void](Read-Host)
   exit 1
 }
 
-Write-Host "برای بستن Enter را بزنید."
+Write-Host "Press Enter to close."
 [void](Read-Host)
 exit 0
